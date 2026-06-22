@@ -1,4 +1,4 @@
-package com.threeline.wallet.config;
+package com.threeline.wallet.utils;
 
 import org.springframework.stereotype.Component;
 

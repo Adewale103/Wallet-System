@@ -1,6 +1,6 @@
 package com.threeline.wallet.service.impl;
 
-import com.threeline.wallet.config.AccountNumberGenerator;
+import com.threeline.wallet.utils.AccountNumberGenerator;
 import com.threeline.wallet.dto.FundWalletRequest;
 import com.threeline.wallet.dto.TransferRequest;
 import com.threeline.wallet.dto.TransferResponse;
@@ -15,6 +15,7 @@ import com.threeline.wallet.repository.UserRepository;
 import com.threeline.wallet.repository.WalletRepository;
 import com.threeline.wallet.repository.WalletTransactionRepository;
 import com.threeline.wallet.service.WalletService;
+import com.threeline.wallet.utils.TransferUtils;
 import jakarta.persistence.PersistenceException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,14 +24,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.util.UUID;
 
 @Service
 @Slf4j
 @RequiredArgsConstructor
 public class WalletServiceImpl implements WalletService {
 
-    private final UserRepository userRepository;
+    private final TransferUtils transferUtils;
     private final WalletRepository walletRepository;
     private final WalletTransactionRepository walletTransactionRepository;
     private final AccountNumberGenerator accountNumberGenerator;
@@ -60,7 +60,7 @@ public class WalletServiceImpl implements WalletService {
         walletRepository.save(wallet);
 
         walletTransactionRepository.save(WalletTransaction.builder()
-                .reference(generateReference())
+                .reference(transferUtils.generateReference())
                 .walletId(wallet.getId())
                 .accountNumber(wallet.getAccountNumber())
                 .type(TransactionType.CREDIT)
@@ -100,28 +100,14 @@ public class WalletServiceImpl implements WalletService {
     @Override
     @Transactional(readOnly = true)
     public WalletResponse getWallet(String accountIdentifier) {
-        return toWalletResponse(resolveWallet(accountIdentifier));
+        return toWalletResponse(transferUtils.resolveWallet(accountIdentifier));
     }
 
-    // ---- helpers ----
 
     private Wallet lockWalletByIdentifier(String identifier) {
-        String accountNumber = resolveWallet(identifier).getAccountNumber();
+        String accountNumber = transferUtils.resolveWallet(identifier).getAccountNumber();
         return walletRepository.findByAccountNumberForUpdate(accountNumber)
                 .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + accountNumber));
-    }
-
-    private Wallet resolveWallet(String identifier) {
-        String trimmed = identifier.trim();
-        if (trimmed.contains("@")) {
-            User user = userRepository.findByEmail(trimmed.toLowerCase())
-                    .orElseThrow(() -> new ResourceNotFoundException("No user found with email: " + trimmed));
-            return walletRepository.findByUserId(user.getId())
-                    .orElseThrow(() -> new ResourceNotFoundException(
-                            "No wallet found for user with email: " + trimmed));
-        }
-        return walletRepository.findByAccountNumber(trimmed)
-                .orElseThrow(() -> new ResourceNotFoundException("Wallet not found for account: " + trimmed));
     }
 
     private String generateUniqueAccountNumber() {
@@ -135,10 +121,6 @@ public class WalletServiceImpl implements WalletService {
             }
         } while (walletRepository.existsByAccountNumber(accountNumber));
         return accountNumber;
-    }
-
-    private String generateReference() {
-        return "TRX-" + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase();
     }
 
     private WalletResponse toWalletResponse(Wallet wallet) {
