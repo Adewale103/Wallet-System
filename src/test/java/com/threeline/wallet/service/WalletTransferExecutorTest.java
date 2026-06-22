@@ -7,10 +7,10 @@ import com.threeline.wallet.entity.Wallet;
 import com.threeline.wallet.exception.InsufficientBalanceException;
 import com.threeline.wallet.exception.InvalidTransferException;
 import com.threeline.wallet.exception.ResourceNotFoundException;
-import com.threeline.wallet.repository.UserRepository;
 import com.threeline.wallet.repository.WalletRepository;
 import com.threeline.wallet.repository.WalletTransactionRepository;
 import com.threeline.wallet.service.impl.WalletTransferExecutor;
+import com.threeline.wallet.utils.TransferUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -30,16 +30,12 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-
 @ExtendWith(MockitoExtension.class)
 class WalletTransferExecutorTest {
 
-    @Mock
-    private UserRepository userRepository;
-    @Mock
-    private WalletRepository walletRepository;
-    @Mock
-    private WalletTransactionRepository walletTransactionRepository;
+    @Mock private TransferUtils transferUtils;
+    @Mock private WalletRepository walletRepository;
+    @Mock private WalletTransactionRepository walletTransactionRepository;
 
     @InjectMocks
     private WalletTransferExecutor executor;
@@ -62,18 +58,19 @@ class WalletTransferExecutorTest {
     void execute_movesFundsBetweenAccounts_andWritesTwoLedgerEntries() {
         TransferRequest request = new TransferRequest("1000000001", "1000000002", new BigDecimal("200.00"), "Rent");
 
-        when(walletRepository.findByAccountNumber("1000000001")).thenReturn(Optional.of(aliceWallet));
-        when(walletRepository.findByAccountNumber("1000000002")).thenReturn(Optional.of(bobWallet));
+        when(transferUtils.resolveWallet("1000000001")).thenReturn(aliceWallet);
+        when(transferUtils.resolveWallet("1000000002")).thenReturn(bobWallet);
         when(walletRepository.findByAccountNumberForUpdate("1000000001")).thenReturn(Optional.of(aliceWallet));
         when(walletRepository.findByAccountNumberForUpdate("1000000002")).thenReturn(Optional.of(bobWallet));
         when(walletRepository.save(any(Wallet.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(transferUtils.generateReference()).thenReturn("TRX-TESTREF0000001");
 
         TransferResponse response = executor.execute(request);
 
         assertThat(response.getFromAccountBalanceAfter()).isEqualByComparingTo("300.00");
         assertThat(aliceWallet.getBalance()).isEqualByComparingTo("300.00");
         assertThat(bobWallet.getBalance()).isEqualByComparingTo("300.00");
-        assertThat(response.getReference()).startsWith("TRX-");
+        assertThat(response.getReference()).isEqualTo("TRX-TESTREF0000001");
         verify(walletTransactionRepository, times(2)).save(any());
     }
 
@@ -81,8 +78,8 @@ class WalletTransferExecutorTest {
     void execute_insufficientBalance_throwsAndDoesNotMutateBalances() {
         TransferRequest request = new TransferRequest("1000000001", "1000000002", new BigDecimal("10000.00"), null);
 
-        when(walletRepository.findByAccountNumber("1000000001")).thenReturn(Optional.of(aliceWallet));
-        when(walletRepository.findByAccountNumber("1000000002")).thenReturn(Optional.of(bobWallet));
+        when(transferUtils.resolveWallet("1000000001")).thenReturn(aliceWallet);
+        when(transferUtils.resolveWallet("1000000002")).thenReturn(bobWallet);
         when(walletRepository.findByAccountNumberForUpdate("1000000001")).thenReturn(Optional.of(aliceWallet));
         when(walletRepository.findByAccountNumberForUpdate("1000000002")).thenReturn(Optional.of(bobWallet));
 
@@ -98,7 +95,7 @@ class WalletTransferExecutorTest {
     @Test
     void execute_toSameAccount_isRejected() {
         TransferRequest request = new TransferRequest("1000000001", "1000000001", new BigDecimal("10.00"), null);
-        when(walletRepository.findByAccountNumber("1000000001")).thenReturn(Optional.of(aliceWallet));
+        when(transferUtils.resolveWallet("1000000001")).thenReturn(aliceWallet);
 
         assertThatThrownBy(() -> executor.execute(request))
                 .isInstanceOf(InvalidTransferException.class);
@@ -109,7 +106,8 @@ class WalletTransferExecutorTest {
     @Test
     void execute_unknownSourceAccount_throwsNotFound() {
         TransferRequest request = new TransferRequest("0000000000", "1000000002", new BigDecimal("10.00"), null);
-        when(walletRepository.findByAccountNumber("0000000000")).thenReturn(Optional.empty());
+        when(transferUtils.resolveWallet("0000000000"))
+                .thenThrow(new ResourceNotFoundException("Wallet not found for account: 0000000000"));
 
         assertThatThrownBy(() -> executor.execute(request))
                 .isInstanceOf(ResourceNotFoundException.class);
@@ -119,13 +117,12 @@ class WalletTransferExecutorTest {
     void execute_byEmailIdentifiers_resolvesBothWallets() {
         TransferRequest request = new TransferRequest("alice@example.com", "bob@example.com", new BigDecimal("75.00"), null);
 
-        when(userRepository.findByEmail("alice@example.com")).thenReturn(Optional.of(aliceUser));
-        when(userRepository.findByEmail("bob@example.com")).thenReturn(Optional.of(bobUser));
-        when(walletRepository.findByUserId(1L)).thenReturn(Optional.of(aliceWallet));
-        when(walletRepository.findByUserId(2L)).thenReturn(Optional.of(bobWallet));
+        when(transferUtils.resolveWallet("alice@example.com")).thenReturn(aliceWallet);
+        when(transferUtils.resolveWallet("bob@example.com")).thenReturn(bobWallet);
         when(walletRepository.findByAccountNumberForUpdate("1000000001")).thenReturn(Optional.of(aliceWallet));
         when(walletRepository.findByAccountNumberForUpdate("1000000002")).thenReturn(Optional.of(bobWallet));
         when(walletRepository.save(any(Wallet.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(transferUtils.generateReference()).thenReturn("TRX-TESTREF0000003");
 
         TransferResponse response = executor.execute(request);
 
@@ -137,11 +134,12 @@ class WalletTransferExecutorTest {
     void execute_exactBalance_succeedsAndZerosOutSourceWallet() {
         TransferRequest request = new TransferRequest("1000000001", "1000000002", new BigDecimal("500.00"), null);
 
-        when(walletRepository.findByAccountNumber("1000000001")).thenReturn(Optional.of(aliceWallet));
-        when(walletRepository.findByAccountNumber("1000000002")).thenReturn(Optional.of(bobWallet));
+        when(transferUtils.resolveWallet("1000000001")).thenReturn(aliceWallet);
+        when(transferUtils.resolveWallet("1000000002")).thenReturn(bobWallet);
         when(walletRepository.findByAccountNumberForUpdate("1000000001")).thenReturn(Optional.of(aliceWallet));
         when(walletRepository.findByAccountNumberForUpdate("1000000002")).thenReturn(Optional.of(bobWallet));
         when(walletRepository.save(any(Wallet.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(transferUtils.generateReference()).thenReturn("TRX-TESTREF0000004");
 
         TransferResponse response = executor.execute(request);
 

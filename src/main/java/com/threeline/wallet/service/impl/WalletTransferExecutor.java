@@ -13,6 +13,7 @@ import com.threeline.wallet.exception.ResourceNotFoundException;
 import com.threeline.wallet.repository.UserRepository;
 import com.threeline.wallet.repository.WalletRepository;
 import com.threeline.wallet.repository.WalletTransactionRepository;
+import com.threeline.wallet.utils.TransferUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -27,14 +28,14 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class WalletTransferExecutor {
 
-    private final UserRepository userRepository;
+    private final TransferUtils transferUtils;
     private final WalletRepository walletRepository;
     private final WalletTransactionRepository walletTransactionRepository;
 
     @Transactional
     public TransferResponse execute(TransferRequest request) {
-        Wallet fromWalletLookup = resolveWallet(request.getFromIdentifier());
-        Wallet toWalletLookup = resolveWallet(request.getToIdentifier());
+        Wallet fromWalletLookup = transferUtils.resolveWallet(request.getFromIdentifier());
+        Wallet toWalletLookup = transferUtils.resolveWallet(request.getToIdentifier());
 
         if (fromWalletLookup.getAccountNumber().equals(toWalletLookup.getAccountNumber())) {
             throw new InvalidTransferException("Cannot transfer to the same account");
@@ -66,7 +67,7 @@ public class WalletTransferExecutor {
         walletRepository.save(fromWallet);
         walletRepository.save(toWallet);
 
-        String reference = generateReference();
+        String reference = transferUtils.generateReference();
         String narration = request.getNarration() != null ? request.getNarration() : "Fund transfer";
 
         walletTransactionRepository.save(WalletTransaction.builder()
@@ -107,20 +108,4 @@ public class WalletTransferExecutor {
                 .build();
     }
 
-    private Wallet resolveWallet(String identifier) {
-        String trimmed = identifier.trim();
-        if (trimmed.contains("@")) {
-            User user = userRepository.findByEmail(trimmed.toLowerCase())
-                    .orElseThrow(() -> new ResourceNotFoundException("No user found with email: " + trimmed));
-            return walletRepository.findByUserId(user.getId())
-                    .orElseThrow(() -> new ResourceNotFoundException(
-                            "No wallet found for user with email: " + trimmed));
-        }
-        return walletRepository.findByAccountNumber(trimmed)
-                .orElseThrow(() -> new ResourceNotFoundException("Wallet not found for account: " + trimmed));
-    }
-
-    private String generateReference() {
-        return "TRX-" + UUID.randomUUID().toString().replace("-", "").substring(0, 16).toUpperCase();
-    }
 }
